@@ -95,7 +95,13 @@ class Ldap extends Model
         $connection = self::connectToLdap();
         $ldap_username_field = $settings->ldap_username_field;
         $baseDn = $settings->ldap_basedn;
-        $userDn = $ldap_username_field.'='.$username.','.$settings->ldap_basedn;
+        $ldap_username = Setting::getSettings()->ldap_uname;
+
+        // Lookup user DN based on $ldap_username_field. We might need to bind first.
+        if (! $ldapbind = self::bindAdminToLdap($connection)) {
+            \Log::debug("Status of binding Admin user: $ldap_username to directory instead: ".($ldapbind ? "success" : "FAILURE"));
+  	        //ldap_close($connection);
+      	}
 
         if ($settings->is_ad == '1') {
             // Check if they are using the userprincipalname for the username field.
@@ -119,8 +125,25 @@ class Ldap extends Model
 
         \Log::debug('Filter query: '.$filterQuery);
 
+        if (! $results = ldap_search($connection, $baseDn, $filterQuery)) {
+            throw new Exception('Could not search LDAP: ');
+        }
+
+        if (! $entry = ldap_first_entry($connection, $results)) {
+            \log::debug("Error getting results");
+            return false;
+        }
+
+        if (! $userDn = ldap_get_dn($connection, $entry)) {
+            \log::debug("Error getting user DN");
+            return false;
+        }
+
         if (! $ldapbind = @ldap_bind($connection, $userDn, $password)) {
             \Log::debug("Status of binding user: $userDn to directory: (directly!) ".($ldapbind ? "success" : "FAILURE"));
+            // We now close current LDAP connection and set new connection to be able to rebind as LDAP Admin
+            ldap_close($connection);
+            $connection = self::connectToLdap();
             if (! $ldapbind = self::bindAdminToLdap($connection)) {
                 /*
                  * TODO PLEASE:
@@ -135,7 +158,7 @@ class Ldap extends Model
                  * Let's definitely fix this at the next refactor!!!!
                  *
                  */
-                \Log::debug("Status of binding Admin user: $userDn to directory instead: ".($ldapbind ? "success" : "FAILURE"));
+                \Log::debug("Status of binding Admin user: $ldap_username to directory instead: ".($ldapbind ? "success" : "FAILURE"));
                 return false;
             }
         }
